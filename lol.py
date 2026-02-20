@@ -12,31 +12,22 @@ import winreg
 import builtins
 
 # ==========================================
-# 🌟 核心配置区 (Core Configuration)
+# 配置区
 # ==========================================
 # [开关] 开机自启 (1 = 开启, 0 = 关闭)
-# 开启后会写入 Windows 注册表，实现无感后台潜伏
 AUTO_STARTUP = 1
-
-# [推送] Server酱 Key (用于微信战报推送)
-# 获取地址: https://sct.ftqq.com/
-# 留空 "" 则仅在本地控制台打印和记录 CSV，不发送微信推送
+# [推送] 你的 Server酱 Key (填入后自动开启微信推送)
 SERVERCHAN_KEY = ""
-
-# [名单] 专属监控白名单 (格式必须是: 游戏ID#标签)
-# 留空 [] 则默认监控好友列表中的所有人
-# 示例: TARGET_FRIENDS = ["Faker#KR1", "Uzi#1234"]
+# [名单] 专属监控白名单 (注意：必须带上 # 号和后面的数字标签)
+# 留空 [] 则默认监控所有人。示例: ["兵部尚书蒋劲夫#76519", "煎蛋小蘑菇#78594"]
 TARGET_FRIENDS = []
 
-# 强制 UTF-8 输出，防止 Windows CMD 中文乱码
+
 sys.stdout.reconfigure(encoding='utf-8')
-# 屏蔽自签证书导致的 HTTPS 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LOCAL_PROXY = {"http": None, "https": None}
-# 线程锁：防止异步战报写入 CSV 时发生文件冲突
 csv_lock = threading.Lock()
-
 
 class LoLMonitor:
     def __init__(self):
@@ -44,7 +35,7 @@ class LoLMonitor:
         self.friends_cache = {}
         self.is_first_scan = True
 
-        # 内置英雄字典 (支持根据 ID 反查中文名)
+        # 内置英雄字典 (全网最全)
         self.champ_dict = {
             "1": "安妮", "2": "奥拉夫", "3": "加里奥", "4": "卡牌", "5": "赵信", "6": "厄加特",
             "7": "妖姬", "8": "吸血鬼", "9": "稻草人", "10": "凯尔", "11": "剑圣", "12": "牛头",
@@ -72,10 +63,13 @@ class LoLMonitor:
             "268": "沙皇", "350": "悠米", "360": "莎弥拉", "412": "锤石", "420": "俄洛伊", "421": "挖掘机",
             "427": "艾翁", "429": "滑板鞋", "432": "巴德", "497": "洛", "498": "霞", "516": "奥恩",
             "517": "塞拉斯", "518": "妮蔻", "523": "厄斐琉斯", "526": "芮尔", "555": "派克", "777": "永恩",
-            "875": "瑟提", "876": "莉莉娅", "887": "格温", "888": "烈娜塔", "893": "极光", "901": "小火龙",
+            "875": "瑟提", "876": "莉莉娅", "887": "格温", "888": "烈娜塔", "893": "兔子", "901": "小火龙",
             "910": "异画师"
         }
 
+    # ==========================================
+    # 🌟 微信推送模块 (仅推战绩)
+    # ==========================================
     def send_push(self, title, content=""):
         if not SERVERCHAN_KEY: return
         try:
@@ -107,8 +101,7 @@ class LoLMonitor:
                     if not file_exists:
                         writer.writerow(['时间', '好友ID', '动作', '详情'])
                     writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name, action, detail])
-            except:
-                pass
+            except: pass
 
     def connect_client(self):
         print("正在寻找英雄联盟客户端...")
@@ -123,8 +116,7 @@ class LoLMonitor:
                         self.headers = {'Authorization': f'Basic {auth}', 'Accept': 'application/json'}
                         print(f"[+] 连接成功！端口: {self.port}")
                         return
-                except:
-                    pass
+                except: pass
             time.sleep(2)
 
     def get_friends(self):
@@ -179,24 +171,25 @@ class LoLMonitor:
 
                         kills, deaths, assists = stats.get('kills', 0), stats.get('deaths', 0), stats.get('assists', 0)
                         win_tag = "[胜利]" if stats.get('win', False) else "[失败]"
-                        res_str = f"{win_tag} 英雄:{champ_name} KDA:{kills}/{deaths}/{assists} (官方时长:{m}分{s}秒)"
+                        res_str = f"{win_tag} 模式:[{mode_name}] 英雄:[{champ_name}] KDA:[{kills}]/[{deaths}]/[{assists}] (时长:{m}分{s}秒)"
 
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 📊 [战报] {display_name} -> {res_str}")
-                        self.log_to_csv(display_name, "战绩入账", res_str)
+                        self.log_to_csv(display_name, "战绩", res_str)
 
                         self.send_push(f"🏆 LOL战报: {display_name} {win_tag}", res_str)
                         return
-            except:
-                pass
+            except: pass
 
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ [战报] {display_name} 战绩刷新超时(服务器延迟)。")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [战报] {display_name} 战绩刷新超时(服务器延迟)。")
 
     def process_status(self, friend):
         name = friend.get('gameName') or friend.get('name') or "未知"
         tag = friend.get('gameTag', '')
         display_name = f"{name}#{tag}" if tag else name
 
-        # 白名单过滤
+        # ==========================================
+        #如果设置了白名单，且该好友不在名单内，直接跳过！
+        # ==========================================
         if TARGET_FRIENDS and (display_name not in TARGET_FRIENDS):
             return
 
@@ -222,16 +215,14 @@ class LoLMonitor:
                     if elapsed > 0:
                         m, s = divmod(elapsed, 60)
                         played_str = f" [已打 {m}分{s}秒]"
-                except:
-                    pass
+                except: pass
 
         now_time = datetime.now().strftime("%H:%M:%S")
 
         if display_name not in self.friends_cache:
-            self.friends_cache[display_name] = {'is_in_game': is_in_game, 'status': current_status, 'cname': cname}
+            self.friends_cache[display_name] = {'is_in_game': is_in_game, 'status': current_status, 'cname': cname,'mode_name':mode_name}
             if self.is_first_scan and (is_in_game or current_status != 'offline'):
-                print(
-                    f"[{now_time}] [扫描] {display_name} {'正在游戏中 -> ' + mode_name + cdisplay + played_str if is_in_game else '当前在线'}")
+                print(f"[{now_time}] [扫描] {display_name} {'正在游戏中 -> '+mode_name+cdisplay+played_str if is_in_game else '当前在线'}")
             return
 
         old = self.friends_cache[display_name]
@@ -248,10 +239,9 @@ class LoLMonitor:
 
         elif old['is_in_game'] and not is_in_game:
             print(f"[{now_time}] [结束] {display_name} 退出游戏，正在拉取官方结算...")
-            threading.Thread(target=self.async_fetch_stats,
-                             args=(display_name, puuid, mode_name, old.get('cname', '未知'))).start()
+            threading.Thread(target=self.async_fetch_stats, args=(display_name, puuid, old.get('mode_name', mode_name), old.get('cname', '未知'))).start()
 
-        self.friends_cache[display_name].update({'is_in_game': is_in_game, 'status': current_status, 'cname': cname})
+        self.friends_cache[display_name].update({'is_in_game': is_in_game, 'status': current_status, 'cname': cname, 'mode_name': mode_name})
 
     def start(self):
         self.connect_client()
@@ -267,23 +257,17 @@ class LoLMonitor:
             self.is_first_scan = False
             time.sleep(3)
 
-
 def handle_startup(enable):
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
-                             winreg.KEY_ALL_ACCESS)
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_ALL_ACCESS)
         cmd = f'"{sys.executable}" "{os.path.realpath(__file__)}"'
         if enable == 1:
             winreg.SetValueEx(key, "LOLMonitor", 0, winreg.REG_SZ, cmd)
         else:
-            try:
-                winreg.DeleteValue(key, "LOLMonitor")
-            except:
-                pass
+            try: winreg.DeleteValue(key, "LOLMonitor")
+            except: pass
         winreg.CloseKey(key)
-    except:
-        pass
-
+    except: pass
 
 if __name__ == "__main__":
     handle_startup(AUTO_STARTUP)
